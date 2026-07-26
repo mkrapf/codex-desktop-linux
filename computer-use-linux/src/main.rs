@@ -56,9 +56,13 @@ async fn main() -> Result<()> {
         }
         Some("state") => {
             let app_name_or_bundle_identifier = std::env::args().nth(2);
-            let nodes =
-                atspi_tree::snapshot_tree(app_name_or_bundle_identifier.as_deref(), None, 120, 12)
-                    .await?;
+            let nodes = atspi_tree::snapshot_tree(
+                app_name_or_bundle_identifier.as_deref(),
+                None,
+                atspi_tree::DEFAULT_TREE_MAX_NODES,
+                atspi_tree::DEFAULT_TREE_MAX_DEPTH,
+            )
+            .await?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&nodes)

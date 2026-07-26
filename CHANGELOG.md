@@ -35,6 +35,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- Hyprland window targeting now detects the Lua config provider and uses its
+  `hl.dsp.focus` dispatcher, while preserving the legacy `focuswindow` path
+  and a bounded unknown-provider fallback.
+- Linux Computer Use now reaches deeply wrapped Electron controls instead of
+  exhausting its AT-SPI budget on lazy, structural, or off-screen nodes. The
+  launcher pins Chromium's complete accessibility mode, blank Chromium action
+  placeholders are ignored, visible role-based controls remain targetable by
+  their semantic name and bounds, and native-Wayland Electron frame-relative
+  extents are rebased to compositor coordinates before pointer input.
 - Concurrent updater entrypoints now serialize state reloads and cache cleanup
   before persisting startup state. A second process can no longer prune an
   active rebuild workspace, while forced checks wait for startup maintenance

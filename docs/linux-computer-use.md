@@ -15,6 +15,15 @@ It supports:
 - pointer-direction feedback for the built-in V2 pet after successful click,
   scroll, and drag actions
 
+Electron accessibility trees are requested in Chromium's persistent
+`complete` mode while Computer Use or another assistive technology is active.
+The backend reads and compacts up to 500 AT-SPI nodes across 32 levels by
+default so deeply wrapped web controls remain available for semantic element
+targeting; callers can still request smaller bounds for lower latency. When
+native-Wayland Electron reports those bounds relative to its main frame, the
+backend rebases that frame's subtree to compositor coordinates so semantic
+clicks land on the named control.
+
 ## Runtime Dependencies
 
 Install `ydotool` 1.0.2 or newer when you need the fallback input path. Earlier

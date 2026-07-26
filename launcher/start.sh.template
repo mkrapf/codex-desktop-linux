@@ -3296,7 +3296,7 @@ write_user_electron_flags_template() {
 # --disable-features=Vulkan
 #
 # Accessibility:
-# --force-renderer-accessibility
+# --force-renderer-accessibility=complete
 #
 # Wayland decorations:
 # --enable-features=WaylandWindowDecorations
@@ -3965,7 +3965,9 @@ build_electron_launch_args() {
     fi
 
     if should_force_renderer_accessibility; then
-        ELECTRON_LAUNCH_ARGS+=(--force-renderer-accessibility)
+        # Supplying the mode keeps Chromium from later downgrading the initial
+        # complete tree while Computer Use or another AT-SPI client is active.
+        ELECTRON_LAUNCH_ARGS+=(--force-renderer-accessibility=complete)
         ELECTRON_RENDERER_ACCESSIBILITY_FORCED=1
     else
         ELECTRON_RENDERER_ACCESSIBILITY_FORCED=0

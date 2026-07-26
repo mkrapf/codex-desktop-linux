@@ -3193,9 +3193,11 @@ mod tests {
         })
     }
 
-    fn test_root(name: &str) -> PathBuf {
-        env::temp_dir().join(format!(
-            "chrome-runtime-test-{name}-{}-{}",
+    fn test_root(_name: &str) -> PathBuf {
+        // These fixtures create Unix sockets. The desktop launcher deliberately
+        // supplies a disk-backed TMPDIR that can be too long for sun_path.
+        PathBuf::from("/tmp").join(format!(
+            "cr-{}-{}",
             std::process::id(),
             random_hex(4).unwrap()
         ))

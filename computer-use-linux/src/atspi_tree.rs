@@ -102,6 +102,11 @@ pub enum ValueSetInvocation {
 
 const MAX_TEXT_READBACK_CHARS: i32 = 4096;
 const MAX_TEXT_SELECTIONS: i32 = 8;
+pub const DEFAULT_TREE_MAX_NODES: usize = 500;
+pub const DEFAULT_TREE_MAX_DEPTH: u32 = 32;
+pub const HARD_TREE_MAX_NODES: usize = 500;
+pub const HARD_TREE_MAX_DEPTH: u32 = 40;
+const HARD_TREE_MAX_VISITED_NODES: usize = 2_000;
 
 pub async fn list_accessible_apps(limit: usize) -> Result<Vec<AccessibleAppSummary>> {
     let conn = connect().await?;
@@ -130,34 +135,63 @@ pub async fn snapshot_tree(
         select_roots(&conn, roots, app_name_or_bundle_identifier, target_pid).await;
     let mut nodes = Vec::new();
     let mut queue = VecDeque::new();
+    let mut visited = 0_usize;
 
     for object_ref in selected_roots {
         queue.push_back((object_ref, 0_u32, None));
     }
 
     while let Some((object_ref, depth, parent_index)) = queue.pop_front() {
-        if nodes.len() >= max_nodes {
+        if nodes.len() >= max_nodes || visited >= HARD_TREE_MAX_VISITED_NODES {
             break;
         }
+        visited += 1;
 
         let Ok(proxy) = open_accessible(&conn, &object_ref).await else {
             continue;
         };
         let index = nodes.len() as u32;
+        // Chromium can materialize a web document's AT-SPI descendants lazily
+        // while its interfaces are first read. Read the node before asking for
+        // children so Electron trees do not stop at a newly exposed document
+        // or section until a later snapshot.
+        let mut node = read_node(&proxy, &object_ref, index, parent_index, depth).await;
+        if !should_include_bounded_node(node.bounds.as_ref(), &node.states) {
+            continue;
+        }
         let child_refs = if depth < max_depth {
             proxy.get_children().await.unwrap_or_default()
         } else {
             Vec::new()
         };
-
-        nodes.push(read_node(&proxy, &object_ref, index, parent_index, depth).await);
+        node.child_count = node.child_count.max(child_refs.len() as i32);
+        let keep = should_keep_accessibility_node(&node);
+        let child_parent_index = if keep {
+            nodes.push(node);
+            Some(index)
+        } else {
+            parent_index
+        };
 
         for child in child_refs {
-            queue.push_back((child, depth + 1, Some(index)));
+            queue.push_back((child, depth + 1, child_parent_index));
         }
     }
 
+    recalculate_child_counts(&mut nodes);
     Ok(nodes)
+}
+
+fn recalculate_child_counts(nodes: &mut [AccessibilityNode]) {
+    let mut child_counts = vec![0_i32; nodes.len()];
+    for parent_index in nodes.iter().filter_map(|node| node.parent_index) {
+        if let Some(count) = child_counts.get_mut(parent_index as usize) {
+            *count += 1;
+        }
+    }
+    for (index, node) in nodes.iter_mut().enumerate() {
+        node.child_count = child_counts[index];
+    }
 }
 
 /// Compact description of the AT-SPI element that currently holds keyboard
@@ -170,8 +204,8 @@ pub struct FocusedElementSummary {
     pub states: Vec<String>,
 }
 
-const FOCUS_PROBE_MAX_NODES: usize = 400;
-const FOCUS_PROBE_MAX_DEPTH: u32 = 16;
+const FOCUS_PROBE_MAX_NODES: usize = 1_000;
+const FOCUS_PROBE_MAX_DEPTH: u32 = DEFAULT_TREE_MAX_DEPTH;
 
 /// Find the element with the `focused` state inside the target app (by pid) or
 /// across all apps. Best-effort and bounded: returns Ok(None) when no focused
@@ -189,6 +223,7 @@ pub async fn focused_element_summary(
     for object_ref in selected_roots {
         queue.push_back((object_ref, 0_u32));
     }
+    let mut best: Option<(bool, u32, FocusedElementSummary)> = None;
 
     while let Some((object_ref, depth)) = queue.pop_front() {
         if visited >= FOCUS_PROBE_MAX_NODES {
@@ -199,17 +234,26 @@ pub async fn focused_element_summary(
         let Ok(proxy) = open_accessible(&conn, &object_ref).await else {
             continue;
         };
-        let Ok(state) = proxy.get_state().await else {
-            continue;
-        };
-        if state.contains(atspi::State::Focused) {
-            let proxies = proxy.proxies().await.ok();
-            return Ok(Some(FocusedElementSummary {
-                role: role_name(&proxy).await,
-                name: optional_string(proxy.name().await.ok()),
-                editable: supports_editable_text(proxies.as_ref()).await,
-                states: state_labels(state),
-            }));
+        // As in snapshot_tree, read interfaces before children so Chromium
+        // materializes lazily exposed web descendants. Do not return the first
+        // focused document: contenteditable controls can also be focused deeper
+        // in the same subtree.
+        let node = read_node(&proxy, &object_ref, visited as u32, None, depth).await;
+        if node.states.iter().any(|state| state == "focused") {
+            let editable =
+                node.supports_editable_text || node.states.iter().any(|state| state == "editable");
+            let summary = FocusedElementSummary {
+                role: node.role,
+                name: node.name,
+                editable,
+                states: node.states,
+            };
+            let priority = (editable, depth);
+            if best.as_ref().is_none_or(|(best_editable, best_depth, _)| {
+                priority > (*best_editable, *best_depth)
+            }) {
+                best = Some((editable, depth, summary));
+            }
         }
         if depth < FOCUS_PROBE_MAX_DEPTH {
             for child in proxy.get_children().await.unwrap_or_default() {
@@ -218,7 +262,7 @@ pub async fn focused_element_summary(
         }
     }
 
-    Ok(None)
+    Ok(best.map(|(_, _, summary)| summary))
 }
 
 pub async fn perform_action(
@@ -374,6 +418,14 @@ async fn select_roots(
             return pid_matches;
         }
 
+        // A PID-only query is an ownership boundary, not a preference. Falling
+        // back to every other AT-SPI root here can report a focused element
+        // from an unrelated application after targeted input. A name filter
+        // may still recover from toolkit/helper PID differences, but without
+        // one there is no safe way to associate another root with the target.
+        if !should_search_non_pid_roots_after_pid_miss(needle.as_deref()) {
+            return Vec::new();
+        }
         remaining = non_pid_matches;
     }
 
@@ -389,6 +441,10 @@ async fn select_roots(
     }
 
     selected
+}
+
+fn should_search_non_pid_roots_after_pid_miss(name_filter: Option<&str>) -> bool {
+    name_filter.is_some()
 }
 
 async fn root_matches(
@@ -527,6 +583,79 @@ fn normalize_bounds(bounds: Bounds) -> Option<Bounds> {
     Some(bounds)
 }
 
+fn should_include_bounded_node(bounds: Option<&Bounds>, states: &[String]) -> bool {
+    // Chromium keeps virtualized/off-screen web content in the accessibility
+    // tree with a real historical layout box and the `visible` state, but
+    // drops `showing`. Keeping those nodes can exhaust the node budget on
+    // hidden sidebars or old messages before reaching the visible composer.
+    // Structural
+    // wrappers often have no bounds and no `showing` state, so only prune
+    // bounded nodes that Chromium explicitly marks as not showing.
+    bounds.is_none()
+        || !states.iter().any(|state| state == "visible")
+        || states.iter().any(|state| state == "showing")
+}
+
+pub(crate) fn should_keep_accessibility_node(node: &AccessibilityNode) -> bool {
+    if node.depth <= 1 {
+        return true;
+    }
+
+    if !node.actions.is_empty() || node.supports_editable_text || node.value.is_some() {
+        return true;
+    }
+
+    let interactive_role = matches!(
+        node.role.as_str(),
+        "button"
+            | "check box"
+            | "combo box"
+            | "entry"
+            | "link"
+            | "list item"
+            | "menu"
+            | "menu item"
+            | "page tab"
+            | "radio button"
+            | "slider"
+            | "spin button"
+            | "switch"
+            | "text"
+            | "toggle button"
+            | "tree item"
+    );
+    if interactive_role && node.bounds.is_some() {
+        return true;
+    }
+
+    let has_copy = has_meaningful_text(node.name.as_deref())
+        || has_meaningful_text(node.description.as_deref())
+        || has_meaningful_text(node.text.as_ref().and_then(|text| text.content.as_deref()));
+    has_copy
+        && matches!(
+            node.role.as_str(),
+            "heading"
+                | "image"
+                | "landmark"
+                | "list"
+                | "list item"
+                | "menu"
+                | "menu item"
+                | "page tab"
+                | "statusbar"
+                | "table cell"
+                | "tree item"
+        )
+}
+
+fn has_meaningful_text(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        value
+            .chars()
+            .any(|character| !character.is_whitespace() && character != '\u{fffc}')
+    })
+}
+
 async fn actions_from_proxies(
     proxies: Option<&atspi::proxy::proxy_ext::Proxies<'_>>,
 ) -> Vec<AccessibilityAction> {
@@ -537,17 +666,23 @@ async fn actions_from_proxies(
         return Vec::new();
     };
 
-    action_proxy
-        .get_actions()
-        .await
-        .unwrap_or_default()
+    normalize_actions(action_proxy.get_actions().await.unwrap_or_default())
+}
+
+fn normalize_actions(actions: Vec<atspi::Action>) -> Vec<AccessibilityAction> {
+    actions
         .into_iter()
         .enumerate()
-        .map(|(index, action)| AccessibilityAction {
-            index: index as i32,
-            name: action.name,
-            description: action.description,
-            keybinding: action.keybinding,
+        .filter_map(|(index, action)| {
+            let is_blank = action.name.trim().is_empty()
+                && action.description.trim().is_empty()
+                && action.keybinding.trim().is_empty();
+            (!is_blank).then_some(AccessibilityAction {
+                index: index as i32,
+                name: action.name,
+                description: action.description,
+                keybinding: action.keybinding,
+            })
         })
         .collect()
 }
@@ -740,6 +875,68 @@ mod tests {
         ];
 
         assert_eq!(select_action_index(&actions, None).unwrap(), 1);
+    }
+
+    #[test]
+    fn normalize_actions_drops_blank_chromium_placeholders() {
+        let actions = vec![
+            atspi::Action {
+                name: String::new(),
+                description: String::new(),
+                keybinding: String::new(),
+            },
+            atspi::Action {
+                name: "click".to_string(),
+                description: String::new(),
+                keybinding: String::new(),
+            },
+        ];
+
+        let normalized = normalize_actions(actions);
+
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0].index, 1);
+        assert_eq!(normalized[0].name, "click");
+    }
+
+    #[test]
+    fn pid_only_selection_never_falls_back_to_unrelated_apps() {
+        assert!(!should_search_non_pid_roots_after_pid_miss(None));
+        assert!(should_search_non_pid_roots_after_pid_miss(Some("spotify")));
+    }
+
+    #[test]
+    fn skips_bounded_visible_but_not_showing_subtrees() {
+        let bounds = Bounds {
+            x: 8,
+            y: 2241,
+            width: 244,
+            height: 25,
+        };
+
+        assert!(!should_include_bounded_node(
+            Some(&bounds),
+            &["enabled".to_string(), "visible".to_string()]
+        ));
+        assert!(should_include_bounded_node(
+            Some(&bounds),
+            &[
+                "enabled".to_string(),
+                "showing".to_string(),
+                "visible".to_string()
+            ]
+        ));
+        assert!(should_include_bounded_node(
+            None,
+            &["enabled".to_string(), "visible".to_string()]
+        ));
+    }
+
+    #[test]
+    fn object_replacement_text_is_not_meaningful_copy() {
+        assert!(!has_meaningful_text(Some("\u{fffc}\u{fffc}")));
+        assert!(!has_meaningful_text(Some(" \n\t")));
+        assert!(has_meaningful_text(Some("Send message")));
     }
 
     #[test]

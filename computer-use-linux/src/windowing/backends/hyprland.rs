@@ -26,7 +26,10 @@ pub fn probe() -> BackendProbe {
                 can_focus_apps: ok,
                 can_focus_windows: ok,
                 detail: if ok {
-                    "hyprctl clients -j returned a JSON array".to_string()
+                    format!(
+                        "hyprctl clients -j returned a JSON array; {}",
+                        hyprland_config_provider().focus_detail()
+                    )
                 } else {
                     "hyprctl clients -j did not return a JSON array".to_string()
                 },
@@ -83,15 +86,88 @@ pub(crate) fn parse_hyprland_clients(json: &str) -> Result<Vec<WindowInfo>> {
 
 pub fn activate_window(window_id: u64) -> Result<()> {
     let address = format!("address:0x{window_id:x}");
-    let output = hyprctl_output(&["dispatch", "focuswindow", &address])
-        .with_context(|| format!("failed to run hyprctl dispatch focuswindow {address}"))?;
-    if output.status.success() {
-        Ok(())
+    let provider = hyprland_config_provider();
+    let mut failures = Vec::new();
+
+    for args in focus_dispatch_attempts(provider, &address) {
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let command_label = format!("hyprctl {}", args.join(" "));
+        let output =
+            hyprctl_output(&arg_refs).with_context(|| format!("failed to run {command_label}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        failures.push(format!("{command_label} failed: {detail}"));
+    }
+
+    bail!("Hyprland focus dispatch failed: {}", failures.join("; "))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HyprlandConfigProvider {
+    Lua,
+    Legacy,
+    Unknown,
+}
+
+impl HyprlandConfigProvider {
+    fn focus_detail(self) -> &'static str {
+        match self {
+            Self::Lua => "Lua config provider detected; focus uses hl.dsp.focus",
+            Self::Legacy => "legacy config provider detected; focus uses focuswindow",
+            Self::Unknown => {
+                "config provider was not reported; focus tries focuswindow then hl.dsp.focus"
+            }
+        }
+    }
+}
+
+fn hyprland_config_provider() -> HyprlandConfigProvider {
+    let Ok(output) = hyprctl_output(&["status"]) else {
+        return HyprlandConfigProvider::Unknown;
+    };
+    if !output.status.success() {
+        return HyprlandConfigProvider::Unknown;
+    }
+    parse_config_provider(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_config_provider(status: &str) -> HyprlandConfigProvider {
+    let Some(provider) = status.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case("configProvider")
+            .then(|| value.trim())
+    }) else {
+        return HyprlandConfigProvider::Unknown;
+    };
+
+    if provider.eq_ignore_ascii_case("lua") {
+        HyprlandConfigProvider::Lua
     } else {
-        bail!(
-            "hyprctl dispatch focuswindow {address} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        HyprlandConfigProvider::Legacy
+    }
+}
+
+fn focus_dispatch_attempts(provider: HyprlandConfigProvider, address: &str) -> Vec<Vec<String>> {
+    let legacy = vec![
+        "dispatch".to_string(),
+        "focuswindow".to_string(),
+        address.to_string(),
+    ];
+    let lua = vec![
+        "dispatch".to_string(),
+        format!("hl.dsp.focus({{ window = '{address}' }})"),
+    ];
+
+    match provider {
+        HyprlandConfigProvider::Lua => vec![lua],
+        HyprlandConfigProvider::Legacy => vec![legacy],
+        HyprlandConfigProvider::Unknown => vec![legacy, lua],
     }
 }
 
@@ -191,6 +267,59 @@ struct HyprlandInstanceCandidate {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn parses_lua_config_provider_from_hyprctl_status() {
+        let status = "Hyprland 0.56.0\nconfigProvider: lua\n";
+
+        assert_eq!(parse_config_provider(status), HyprlandConfigProvider::Lua);
+    }
+
+    #[test]
+    fn treats_non_lua_config_provider_as_legacy() {
+        let status = "Hyprland 0.55.0\nconfigProvider: hyprlang\n";
+
+        assert_eq!(
+            parse_config_provider(status),
+            HyprlandConfigProvider::Legacy
+        );
+    }
+
+    #[test]
+    fn builds_lua_focus_dispatch_for_lua_config_provider() {
+        let attempts = focus_dispatch_attempts(HyprlandConfigProvider::Lua, "address:0x1234abcd");
+
+        assert_eq!(
+            attempts,
+            vec![vec![
+                "dispatch".to_string(),
+                "hl.dsp.focus({ window = 'address:0x1234abcd' })".to_string(),
+            ]]
+        );
+    }
+
+    #[test]
+    fn falls_back_to_lua_focus_when_config_provider_is_unknown() {
+        let attempts =
+            focus_dispatch_attempts(HyprlandConfigProvider::Unknown, "address:0x1234abcd");
+
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(
+            attempts[0],
+            vec![
+                "dispatch".to_string(),
+                "focuswindow".to_string(),
+                "address:0x1234abcd".to_string(),
+            ]
+        );
+        assert_eq!(
+            attempts[1],
+            vec![
+                "dispatch".to_string(),
+                "hl.dsp.focus({ window = 'address:0x1234abcd' })".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn selects_wayland_matching_hyprland_instance_before_newer_nonmatch() {

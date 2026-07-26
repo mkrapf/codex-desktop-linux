@@ -35,6 +35,15 @@ cleanup() {
         fi
         arg0=""
     done
+    # Terminated launcher fixtures can finish one last Node compile-cache write
+    # before exiting. Bound teardown retries to the explicit test workspace.
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if rm -rf "$TMP_DIR" && [ ! -e "$TMP_DIR" ]; then
+            return 0
+        fi
+        sleep 0.05
+    done
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT

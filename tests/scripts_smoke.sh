@@ -43,6 +43,16 @@ TMP_DIR="$(mktemp -d)"
 export CODEX_LINUX_FEATURES_CONFIG="$REPO_DIR/linux-features/features.example.json"
 
 cleanup() {
+    # A just-exited Node fixture can finish populating its compile cache while
+    # teardown starts. Retry the bounded test workspace removal rather than
+    # turning that harmless directory race into a smoke-suite failure.
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if rm -rf "$TMP_DIR" && [ ! -e "$TMP_DIR" ]; then
+            return 0
+        fi
+        sleep 0.05
+    done
     rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
@@ -6061,14 +6071,14 @@ EOF
     [[ "$output" != *"electron=<--enable-features=GlobalShortcutsPortal>"* ]] || fail "merged Electron feature flags must not remain in pass-through args: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility under wayland-gpu: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force complete renderer accessibility under wayland-gpu: $output"
 
     output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
     [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* ]] || fail "explicit --x11 must override the wayland-gpu platform: $output"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must fall back to assistive-technology detection: $output"
 
     output="$(env -i PATH="$at_stub_dir/orca:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --x11)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "wayland-gpu with explicit --x11 must force renderer accessibility when a screen reader runs: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "wayland-gpu with explicit --x11 must force complete renderer accessibility when a screen reader runs: $output"
 
     output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wayland-gpu "$launcher_probe" probe --safe-mode)"
     [[ "$output" == *"mode=wayland-gpu"* && "$output" == *"ozone_platform=x11"* && "$output" == *"gpu=0"* ]] || fail "safe-mode must override wayland-gpu to X11 software rendering: $output"
@@ -6085,31 +6095,31 @@ EOF
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "forced WSLg profile must skip renderer accessibility by default: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=wslg CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility under WSLg: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force complete renderer accessibility under WSLg: $output"
 
     output="$(env -i PATH="$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_RENDERER_ACCESSIBILITY=0 "$launcher_probe" probe)"
     [[ "$output" == *"renderer_accessibility=0"* && "$output" != *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=0 must disable renderer accessibility under default Linux: $output"
 
     output="$(env -i PATH="$at_stub_dir/orca:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "a running screen reader must force renderer accessibility under default Linux: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "a running screen reader must force complete renderer accessibility under default Linux: $output"
 
     output="$(env -i PATH="$at_stub_dir/screenreader:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "the GNOME screen-reader setting must force renderer accessibility under default Linux: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "the GNOME screen-reader setting must force complete renderer accessibility under default Linux: $output"
 
     output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" GNOME_ACCESSIBILITY=1 CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "GNOME_ACCESSIBILITY=1 must force renderer accessibility under default Linux: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "GNOME_ACCESSIBILITY=1 must force complete renderer accessibility under default Linux: $output"
 
     output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 must force renderer accessibility under default Linux: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 must force complete renderer accessibility under default Linux: $output"
 
     output="$(env -i PATH="$at_stub_dir/none:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default CODEX_FORCE_RENDERER_ACCESSIBILITY=1 "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force renderer accessibility without detected assistive technology: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "CODEX_FORCE_RENDERER_ACCESSIBILITY=1 must force complete renderer accessibility without detected assistive technology: $output"
 
     output="$(env -i PATH="$at_stub_dir/toolkit:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "toolkit-accessibility=true (Computer Use gsettings fallback) must force renderer accessibility: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "toolkit-accessibility=true (Computer Use gsettings fallback) must force complete renderer accessibility: $output"
 
     output="$(env -i PATH="$at_stub_dir/atspibus:$PATH" HOME="$HOME" CODEX_LINUX_RENDERING_MODE=default "$launcher_probe" probe)"
-    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility>"* ]] || fail "org.a11y.Status IsEnabled (Computer Use setup) must force renderer accessibility: $output"
+    [[ "$output" == *"renderer_accessibility=1"* && "$output" == *"<--force-renderer-accessibility=complete>"* ]] || fail "org.a11y.Status IsEnabled (Computer Use setup) must force complete renderer accessibility: $output"
 
     local at_probe_start_ns at_probe_end_ns at_probe_elapsed_ms slowbus_pid slowbus_pid_file
     slowbus_pid_file="$TMP_DIR/slowbus-gsettings.pid"

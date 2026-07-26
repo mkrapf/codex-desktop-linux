@@ -1925,6 +1925,9 @@ while True:
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        env::temp_dir().join(format!("{prefix}-{}-{nonce}", process::id()))
+        let _ = prefix;
+        // Runtime fixtures contain Unix sockets, so keep their paths below the
+        // Linux sun_path limit even when Desktop exports a long TMPDIR.
+        PathBuf::from(format!("/tmp/ch-{}-{nonce}", process::id()))
     }
 }

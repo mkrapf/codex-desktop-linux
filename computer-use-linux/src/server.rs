@@ -1,7 +1,8 @@
 use crate::atspi_tree::{
     focused_element_summary, list_accessible_apps, perform_action as invoke_accessibility_action,
-    set_element_value, snapshot_tree, AccessibilityAction, AccessibilityNode, AccessibleAppSummary,
-    Bounds, FocusedElementSummary, ValueSetInvocation,
+    set_element_value, should_keep_accessibility_node, snapshot_tree, AccessibilityAction,
+    AccessibilityNode, AccessibleAppSummary, Bounds, FocusedElementSummary, ValueSetInvocation,
+    DEFAULT_TREE_MAX_DEPTH, DEFAULT_TREE_MAX_NODES, HARD_TREE_MAX_DEPTH, HARD_TREE_MAX_NODES,
 };
 use crate::diagnostics::{doctor_report, setup_accessibility_report, DoctorReport, SetupReport};
 use crate::gnome_extension::{setup_window_targeting_report, WindowTargetingSetupReport};
@@ -256,8 +257,14 @@ impl ComputerUseLinux {
         let diagnostics = doctor_report();
         let (window_context, window_error, window_permissions_hint) =
             self.resolve_window_context(&params).await;
-        let max_nodes = params.max_nodes.unwrap_or(120).clamp(1, 500);
-        let max_depth = params.max_depth.unwrap_or(12).min(12);
+        let max_nodes = params
+            .max_nodes
+            .unwrap_or(DEFAULT_TREE_MAX_NODES)
+            .clamp(1, HARD_TREE_MAX_NODES);
+        let max_depth = params
+            .max_depth
+            .unwrap_or(DEFAULT_TREE_MAX_DEPTH)
+            .min(HARD_TREE_MAX_DEPTH);
         let include_screenshot = params.include_screenshot.unwrap_or(true);
         let screenshot_options = params.screenshot_options();
         let app_filter = self
@@ -278,7 +285,11 @@ impl ComputerUseLinux {
             if diagnostics.readiness.can_build_accessibility_tree {
                 let target_pid = window_context.as_ref().and_then(|window| window.pid);
                 match snapshot_tree(app_filter.as_deref(), target_pid, max_nodes, max_depth).await {
-                    Ok(nodes) => {
+                    Ok(mut nodes) => {
+                        rebase_window_relative_accessibility_bounds(
+                            &mut nodes,
+                            window_context.as_ref(),
+                        );
                         let raw_count = nodes.len();
                         (compact_accessibility_tree(nodes), raw_count, None)
                     }
@@ -1469,8 +1480,10 @@ struct GetAppStateParams {
     wm_class: Option<String>,
     #[serde(default)]
     title: Option<String>,
+    /// Maximum raw AT-SPI nodes to read before compaction (default and hard cap: 500).
     #[serde(default)]
     max_nodes: Option<usize>,
+    /// Maximum AT-SPI tree depth (default 32, hard-capped at 40).
     #[serde(default)]
     max_depth: Option<u32>,
     #[serde(default)]
@@ -2791,6 +2804,68 @@ fn bounds_center(bounds: &Bounds) -> Option<(i32, i32)> {
     ))
 }
 
+/// Chromium/Electron on native Wayland can return `CoordType::Screen` extents
+/// relative to its main frame even though AT-SPI calls them screen coordinates.
+/// When the matching top-level frame starts near (0, 0), translate only that
+/// frame's subtree into the compositor's desktop coordinate space. Native apps
+/// that already report global extents are left unchanged.
+fn rebase_window_relative_accessibility_bounds(
+    nodes: &mut [AccessibilityNode],
+    window: Option<&WindowInfo>,
+) -> bool {
+    let Some(window_bounds) = window.and_then(|window| window.bounds.as_ref()) else {
+        return false;
+    };
+    let Some((window_x, window_y)) = window_bounds.x.zip(window_bounds.y) else {
+        return false;
+    };
+
+    let frame = nodes
+        .iter()
+        .filter(|node| node.role.eq_ignore_ascii_case("frame") && node.depth <= 2)
+        .filter_map(|node| node.bounds.as_ref().map(|bounds| (node.index, bounds)))
+        .filter(|(_, bounds)| {
+            bounds.width > 0
+                && bounds.height > 0
+                && bounds.width.abs_diff(window_bounds.width as i32) <= 8
+                && bounds.height.abs_diff(window_bounds.height as i32) <= 8
+        })
+        .filter(|(_, bounds)| {
+            bounds.x.abs() <= 8
+                && bounds.y.abs() <= 8
+                && (bounds.x != window_x || bounds.y != window_y)
+        })
+        .min_by_key(|(_, bounds)| {
+            bounds.width.abs_diff(window_bounds.width as i32)
+                + bounds.height.abs_diff(window_bounds.height as i32)
+        });
+    let Some((frame_index, frame_bounds)) = frame else {
+        return false;
+    };
+    let offset_x = window_x.saturating_sub(frame_bounds.x);
+    let offset_y = window_y.saturating_sub(frame_bounds.y);
+
+    let mut subtree = std::collections::HashSet::from([frame_index]);
+    for node in nodes.iter() {
+        if node
+            .parent_index
+            .is_some_and(|parent| subtree.contains(&parent))
+        {
+            subtree.insert(node.index);
+        }
+    }
+    for node in nodes
+        .iter_mut()
+        .filter(|node| subtree.contains(&node.index))
+    {
+        if let Some(bounds) = node.bounds.as_mut() {
+            bounds.x = bounds.x.saturating_add(offset_x);
+            bounds.y = bounds.y.saturating_add(offset_y);
+        }
+    }
+    true
+}
+
 fn compact_accessibility_tree(nodes: Vec<AccessibilityNode>) -> Vec<AccessibilityNode> {
     if nodes.is_empty() {
         return nodes;
@@ -2850,39 +2925,6 @@ fn nearest_kept_parent(
         parent = nodes.get(parent_usize).and_then(|node| node.parent_index);
     }
     None
-}
-
-fn should_keep_accessibility_node(node: &AccessibilityNode) -> bool {
-    if node.depth <= 1 {
-        return true;
-    }
-
-    if is_actionable_accessibility_node(node) || has_meaningful_node_copy(node) {
-        return true;
-    }
-
-    matches!(
-        node.role.as_str(),
-        "page tab" | "menu item" | "menu" | "list item" | "tree item"
-    ) && !is_sentinel_or_missing_bounds(node.bounds.as_ref())
-}
-
-fn is_actionable_accessibility_node(node: &AccessibilityNode) -> bool {
-    !node.actions.is_empty() || node.supports_editable_text || node.value.is_some()
-}
-
-fn has_meaningful_node_copy(node: &AccessibilityNode) -> bool {
-    has_non_empty_text(node.name.as_deref())
-        || has_non_empty_text(node.description.as_deref())
-        || has_non_empty_text(node.text.as_ref().and_then(|text| text.content.as_deref()))
-}
-
-fn has_non_empty_text(value: Option<&str>) -> bool {
-    value.map(str::trim).is_some_and(|value| !value.is_empty())
-}
-
-fn is_sentinel_or_missing_bounds(bounds: Option<&Bounds>) -> bool {
-    bounds.is_none()
 }
 
 fn select_accessibility_object_ref(
@@ -4076,8 +4118,10 @@ mod tests {
 
     #[tokio::test]
     async fn avatar_cursor_signal_uses_the_private_unix_stream_protocol() {
-        let root = std::env::temp_dir().join(format!(
-            "computer-use-avatar-cursor-{}-{}",
+        // Unix-domain socket paths are limited to roughly 108 bytes on Linux.
+        // Keep this protocol fixture independent of a potentially long TMPDIR.
+        let root = std::path::PathBuf::from(format!(
+            "/tmp/cu-cursor-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4595,6 +4639,100 @@ mod tests {
             .unwrap();
 
         assert_eq!(point, (60, 40));
+    }
+
+    #[test]
+    fn window_relative_accessibility_bounds_are_rebased_to_desktop_coordinates() {
+        let mut frame = node(
+            1,
+            Some(Bounds {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600,
+            }),
+        );
+        frame.role = "frame".to_string();
+        frame.depth = 1;
+        let mut composer = node(
+            2,
+            Some(Bounds {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 40,
+            }),
+        );
+        composer.role = "entry".to_string();
+        composer.parent_index = Some(1);
+        composer.depth = 20;
+        let mut overlay = node(
+            3,
+            Some(Bounds {
+                x: 5,
+                y: 6,
+                width: 200,
+                height: 100,
+            }),
+        );
+        overlay.role = "frame".to_string();
+        overlay.depth = 1;
+        let mut nodes = vec![frame, composer, overlay];
+        let window = window_with_bounds(1, 100, 200, 800, 600);
+
+        assert!(rebase_window_relative_accessibility_bounds(
+            &mut nodes,
+            Some(&window)
+        ));
+        assert_eq!(
+            nodes[0].bounds.as_ref().map(|bounds| (bounds.x, bounds.y)),
+            Some((100, 200))
+        );
+        assert_eq!(
+            nodes[1].bounds.as_ref().map(|bounds| (bounds.x, bounds.y)),
+            Some((110, 220))
+        );
+        assert_eq!(
+            nodes[2].bounds.as_ref().map(|bounds| (bounds.x, bounds.y)),
+            Some((5, 6))
+        );
+    }
+
+    #[test]
+    fn global_accessibility_bounds_are_not_rebased_twice() {
+        let mut frame = node(
+            1,
+            Some(Bounds {
+                x: 100,
+                y: 200,
+                width: 800,
+                height: 600,
+            }),
+        );
+        frame.role = "frame".to_string();
+        frame.depth = 1;
+        let mut composer = node(
+            2,
+            Some(Bounds {
+                x: 110,
+                y: 220,
+                width: 100,
+                height: 40,
+            }),
+        );
+        composer.role = "entry".to_string();
+        composer.parent_index = Some(1);
+        let mut nodes = vec![frame, composer];
+        let window = window_with_bounds(1, 100, 200, 800, 600);
+
+        assert!(!rebase_window_relative_accessibility_bounds(
+            &mut nodes,
+            Some(&window)
+        ));
+        assert_eq!(
+            nodes[1].bounds.as_ref().map(|bounds| (bounds.x, bounds.y)),
+            Some((110, 220))
+        );
     }
 
     #[test]

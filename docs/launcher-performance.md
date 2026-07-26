@@ -19,12 +19,14 @@ launcher log, and repository history rather than synthetic benchmarks.
   Chromium's renderer/GPU shared-memory buffers into disk-backed temp storage
   (observable as `/tmp/.org.chromium.Chromium.*` mappings in every process).
   Override: `CODEX_ELECTRON_DISABLE_DEV_SHM_USAGE=auto|0|1`.
-- `--force-renderer-accessibility` is now added only when an assistive
+- `--force-renderer-accessibility=complete` is now added only when an assistive
   technology is detected: Orca or brltty running, the GNOME screen-reader
   setting, the AT-SPI state that `codex-computer-use-linux setup` enables
   (`org.a11y.Status IsEnabled` via busctl, or its
   `org.gnome.desktop.interface toolkit-accessibility` gsettings fallback), or
-  accessibility env markers. Keeping the accessibility engine on in every
+  accessibility env markers. The explicit `complete` mode prevents Chromium
+  from downgrading the initially complete tree while an AT-SPI client such as
+  Linux Computer Use is active. Keeping the accessibility engine on in every
   renderer makes each DOM update also rebuild and serialize the accessibility
   tree; the WSLg and wayland-gpu profiles already skipped the flag for that
   reason. Session-bus probes (gsettings/busctl) run under the launcher's
