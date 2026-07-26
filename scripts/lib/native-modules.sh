@@ -227,8 +227,13 @@ build_native_modules() {
         "$ELECTRON_REBUILD_PACKAGE" \
         "$ELECTRON_REBUILD_NODE_ABI_PACKAGE" \
         --save-dev \
+        --include=dev \
         --ignore-scripts >&2
-    npm install "better-sqlite3@$bs3_build_ver" "node-pty@$npty_ver" --ignore-scripts >&2
+    npm install \
+        "better-sqlite3@$bs3_build_ver" \
+        "node-pty@$npty_ver" \
+        --include=dev \
+        --ignore-scripts >&2
     patch_better_sqlite3_for_v8_external_pointer_api "$build_dir/node_modules/better-sqlite3"
 
     info "Compiling for Electron v$ELECTRON_VERSION (this takes ~1 min)..."
