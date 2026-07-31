@@ -1439,6 +1439,7 @@ SCRIPT
     assert_contains "$capture_dir/PKGBUILD" "pkgver=2026.03.24.120000+manual"
     assert_contains "$capture_dir/PKGBUILD" "pkgrel=1"
     assert_contains "$capture_dir/PKGBUILD" "ampersand&tmp"
+    assert_contains "$capture_dir/PKGBUILD" "cp -a --no-preserve=ownership"
     assert_not_contains "$capture_dir/PKGBUILD" "__STAGING_DIR__"
     assert_contains "$capture_dir/PKGBUILD" "install=codex-desktop.install"
     assert_occurrence_count "$capture_dir/PKGBUILD" "'polkit'" "1"
@@ -8991,7 +8992,7 @@ const x={o:e=>e};let s=require(`node:url`),n=require(`electron`);n=x.o(n);let l=
 var pb=class{getNativeTrayMenuItems(){return[{label:this.systemQuitMenuItemLabel,click:()=>{n.app.quit()}}]}};
 function qB(r,o){if(o.type===`quit-app`){n.app.quit();return}return o}
 n.app.on(`before-quit`,o=>{let s=BI(),c=t.sr().some(e=>e.status===`ACTIVE`);if(e||i.canQuitWithoutPrompt()||r||!s&&!c){g=!0,a.markAppQuitting();return}let l=n.app.getName();if(n.dialog.showMessageBoxSync({type:`warning`,buttons:[`Quit`,`Cancel`],defaultId:0,cancelId:1,noLink:!0,title:`Quit ${l}?`,message:`Quit ${l}?`,detail:vB({hasInProgressLocalConversation:s,hasEnabledAutomations:c})})!==0){o.preventDefault();return}i.markQuitApproved(),g=!0,a.markAppQuitting()});
-n.app.on(`will-quit`,e=>{if(g=!0,!h){if(i.shouldSkipDrainBeforeQuit()){mB({hotkeyWindowLifecycleManager:c,globalDictationLifecycleManager:l,flushAndDisposeContexts:d,disposables:f});return}e.preventDefault(),h=!0,c.dispose(),l.dispose(),Promise.all([u.flush(),p.flush()]).finally(()=>{d(),f.dispose(),n.app.quit()})}});
+l.app.on(`will-quit`,e=>{if(y=!0,v)return;let t=()=>{U5(h,N5).then(()=>{g.dispose(),l.app.quit()})};if(r.shouldSkipDrainBeforeQuit()){e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([p(),m()]).then(t);return}e.preventDefault(),v=!0,c.dispose(),u.dispose(),Promise.allSettled([d.flush(),f.flush(),p(),m()]).then(t)});
 JS
 )"
     make_fake_extracted_asar "$extracted" "$bundle_body"
@@ -9003,9 +9004,18 @@ JS
     assert_contains "$extracted/.vite/build/main-test.js" 'if(o.type===`quit-app`){typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),n.app.quit();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'if((typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt())||e||i.canQuitWithoutPrompt()||r||!s&&!c){process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),g=!0,a.markAppQuitting();return}'
     assert_contains "$extracted/.vite/build/main-test.js" 'process.platform===`linux`&&typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress(),i.markQuitApproved(),g=!0,a.markAppQuitting()'
-    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{d(),f.dispose(),n.app.quit()},codexLinuxDrainPromise=Promise.all('
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxLogQuitDrainResults=e=>{'
+    assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'codexLinuxQuitFinalized'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit drain cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit context cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'WARN: Linux quit disposables cleanup failed'
+    assert_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.exit(0)}'
+    assert_not_contains "$extracted/.vite/build/main-test.js" 'finally{l.app.quit()}'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
+    assert_contains "$extracted/.vite/build/main-test.js" 'Promise.resolve().then(e).then(codexLinuxLogQuitDrainResults),new Promise'
     assert_contains "$extracted/.vite/build/main-test.js" 'codexLinuxExplicitQuitDrainTimeoutMs'
-    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(e,typeof codexLinuxExplicitQuitDrainTimeoutMs'
+    assert_contains "$extracted/.vite/build/main-test.js" 'setTimeout(()=>e(Error(`Linux quit drain timed out`)),typeof codexLinuxExplicitQuitDrainTimeoutMs'
     assert_not_contains "$extracted/.vite/build/main-test.js" '\`number\`'
     assert_not_contains "$output_log" 'WARN: Could not find tray quit menu handler'
     assert_not_contains "$output_log" 'WARN: Could not find quit-app IPC handler'
@@ -9109,7 +9119,9 @@ NODE
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxShouldBypassQuitPrompt=()=>codexLinuxExplicitQuitApproved===!0' '1'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxPrepareForExplicitQuit===`function`?codexLinuxPrepareForExplicitQuit():typeof codexLinuxMarkQuitInProgress===`function`&&codexLinuxMarkQuitInProgress()' '2'
     assert_occurrence_count "$extracted/.vite/build/main-test.js" 'typeof codexLinuxShouldBypassQuitPrompt===`function`&&codexLinuxShouldBypassQuitPrompt()' '1'
-    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxDrainPromise=Promise.all(' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxLogQuitDrainResults=e=>{' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxFinalizeQuit=()=>{' '1'
+    assert_occurrence_count "$extracted/.vite/build/main-test.js" 'codexLinuxRunQuitDrain(()=>{' '2'
 }
 
 test_keybinds_settings_tab_patch_smoke() {
@@ -9129,6 +9141,9 @@ import{t as d}from"./jsx-runtime-test.js";var c={"general-settings":{id:`setting
 JS
     cat > "$extracted/webview/assets/use-visible-settings-sections-test.js" <<'JS'
 var Xge={"general-settings":xh,"keyboard-shortcuts":ks,appearance:Pf,agent:gU};function n_e(){let e=e=>{switch(e.slug){case`general-settings`:case`agent`:case`personalization`:return!0;case`keyboard-shortcuts`:return!0}}}
+JS
+    cat > "$extracted/webview/assets/settings-page-test.js" <<'JS'
+var nn=`general-settings.import.profile.appearance.keyboard-shortcuts`.split(`.`),rn=[{key:`personal`,heading:d({id:`settings.nav.heading.personal`,defaultMessage:`Personal`,description:`Heading for personal settings in the settings navigation`}),slugs:[`general-settings`,`import`,`profile`,`appearance`,`keyboard-shortcuts`]}];
 JS
     cat > "$extracted/webview/assets/app-initial-BTphDPeq.js" <<'JS'
 import{n as routeModule,s as routeToESM}from"./rolldown-runtime-test.js";import{I as routeJsxFactory,R as routeReactFactory}from"./shared-runtime-test.js";function Z(e){let r=(0,RouteReact.lazy)(e);function SettingsRouteWrapper(){let t=(0,RouteReact.useState)(null);return (0,RouteJsx.jsx)(r,{children:t})}return SettingsRouteWrapper}var RouteReact,RouteJsx;routeModule(()=>{RouteReact=routeToESM(routeReactFactory(),1),RouteJsx=routeJsxFactory()})();var c_e={"general-settings":Z(async()=>(await s(async()=>{let{GeneralSettings:e}=await import(`./general-settings-DZbwMmWz.js`);return{GeneralSettings:e}},[],import.meta.url)).GeneralSettings),"keyboard-shortcuts":Z(async()=>(await s(async()=>{let{KeyboardShortcutsSettings:e}=await import(`./keyboard-shortcuts-settings-test.js`);return{KeyboardShortcutsSettings:e}},[],import.meta.url)).KeyboardShortcutsSettings)};export{Z};
@@ -9161,6 +9176,7 @@ JS
     assert_contains "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop"
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop":xh,"general-settings":xh'
     assert_contains "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`:return!0;case`general-settings`'
+    assert_contains "$extracted/webview/assets/settings-page-test.js" 'slugs:\[`general-settings`,`linux-desktop`,`import`'
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js?v="
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'export{Z,'
     assert_contains "$extracted/webview/assets/app-initial-BTphDPeq.js" 'RouteReact as codexLinuxReact,RouteJsx as codexLinuxJsx'
@@ -9174,6 +9190,7 @@ JS
     assert_occurrence_count "$extracted/webview/assets/settings-shared-test.js" "settings.section.linux-desktop" '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" '"linux-desktop"' '1'
     assert_occurrence_count "$extracted/webview/assets/use-visible-settings-sections-test.js" 'case`linux-desktop`' '1'
+    assert_occurrence_count "$extracted/webview/assets/settings-page-test.js" '`linux-desktop`' '1'
     assert_occurrence_count "$extracted/webview/assets/app-initial-BTphDPeq.js" "linux-desktop-settings-linux.js" '1'
 }
 
