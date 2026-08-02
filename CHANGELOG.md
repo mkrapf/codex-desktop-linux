@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- The embedded Computer Use backend is synchronized to standalone v0.4.5 as
+  `0.4.5-linux-alpha1`, including generic X11/EWMH window control, X11
+  `xdotool` keyboard/text input, KDE portal scroll polarity, and portal key
+  chords, with generic X11 registered last.
 - A shared upstream DMG acceptance profile now produces the same structured
   decision for local installs, updater rebuilds, and scheduled CI. Scheduled
   rejections create one fingerprinted drift issue and supersede issues for
@@ -35,19 +39,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
-- Hyprland window targeting now detects the Lua config provider and uses its
-  `hl.dsp.focus` dispatcher, while preserving the legacy `focuswindow` path
-  and a bounded unknown-provider fallback.
+- Hyprland window targeting supports the Lua `hl.dsp.focus` dispatcher while
+  preserving the legacy `focuswindow` fallback.
 - Linux Computer Use now reaches deeply wrapped Electron controls instead of
   exhausting its AT-SPI budget on lazy, structural, or off-screen nodes. The
   launcher pins Chromium's complete accessibility mode, blank Chromium action
   placeholders are ignored, visible role-based controls remain targetable by
   their semantic name and bounds, and native-Wayland Electron frame-relative
   extents are rebased to compositor coordinates before pointer input.
+- The opt-in Dock icon tweak now targets the current upstream main-process
+  bundle, restoring Linux window, tray, and desktop icon synchronization.
+- The opt-in shallow repository watcher now patches both current app bundles
+  and routes the Linux Parcel working-tree path through the same shallow host,
+  restoring bounded watches on the latest upstream DMG.
+- Computer Use now supports Plasma 5 and 6 KWin scripting, validates every
+  ydotool 1.0.3+ command shape it emits, and rejects semantically incompatible
+  CLIs even when a daemon socket exists. Hyprland dispatch validation handles
+  exit-zero errors, modifier chords use the v0.4.3 delay, and an xdotool command
+  that starts but fails is never replayed through ydotool.
 - Open Target Discovery now resolves the selected Linux editor or terminal
   through the current private open-target command path. Command-path drift is
   reported before the feature changes the main bundle, so enabled-feature
   acceptance cannot mistake a partially patched bundle for success.
+- Repeated current-DMG patch passes now keep composed native and frameless
+  titlebars, external-open handling, Record & Replay, and Browser Use runtime
+  resolution byte-identical. Complete markers no longer depend on
+  function-local minified aliases, while partial markers remain fail-soft and
+  leave drifted assets untouched.
 - Remote mobile control now patches the current 26.721 dual-gate enablement
   bridge instead of reporting it as already applied. Startup auto-connects the
   environment owned by this Desktop without overwriting saved choices for
