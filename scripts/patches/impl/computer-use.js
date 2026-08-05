@@ -481,6 +481,47 @@ function applyCurrentComputerUseSettingsContract(currentSource) {
     },
   );
 
+  // Current 26.727 memoizes the Computer Use plugin lookup after the initial
+  // plugin-query declaration instead of keeping the lookup in that declaration.
+  // Split the declaration at its next binding so Linux can inject the bundled
+  // marketplace entry before any memoized plugin selectors read the query.
+  if (!cardChanged && !currentSource.includes("computer-use-plugin-icon-linux.png")) {
+    const memoizedCardPattern =
+      /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\3\),([A-Za-z_$][\w$]*)=/g;
+    patchedSource = patchedSource.replace(
+      memoizedCardPattern,
+      (
+        match,
+        pluginsQueryVar,
+        pluginsHookVar,
+        selectedHostVar,
+        emptyPluginsVar,
+        marketplacePathVar,
+        marketplacePathHookVar,
+        nextVar,
+        offset,
+      ) => {
+        const lookback = patchedSource.slice(Math.max(0, offset - 1200), offset);
+        const nextSource = patchedSource.slice(offset + match.length, offset + match.length + 1800);
+        const platformVar = lookback.match(
+          /\{computerUseAvailability:[A-Za-z_$][\w$]*,platform:([A-Za-z_$][\w$]*)\}=/,
+        )?.[1];
+        const pluginNameVar = nextSource.match(
+          new RegExp(
+            String.raw`[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(${pluginsQueryVar}\.availablePlugins,([A-Za-z_$][\w$]*),${marketplacePathVar}\)`,
+          ),
+        )?.[1];
+        if (platformVar == null || pluginNameVar == null) {
+          return match;
+        }
+
+        const bundledMarketplaceDonorVar = `${pluginsQueryVar}BundledMarketplaceDonor`;
+        cardChanged = true;
+        return `let ${pluginsQueryVar}=${pluginsHookVar}(${selectedHostVar},${emptyPluginsVar}),${marketplacePathVar}=${marketplacePathHookVar}(${selectedHostVar});let ${bundledMarketplaceDonorVar}=${pluginsQueryVar}.availablePlugins.find(e=>e.marketplaceName===\`openai-bundled\`&&typeof e.marketplacePath===\`string\`&&e.marketplacePath.startsWith(\`/\`)&&e.marketplacePath.endsWith(\`/.agents/plugins/marketplace.json\`));${platformVar}===\`linux\`&&${bundledMarketplaceDonorVar}!=null&&!${pluginsQueryVar}.availablePlugins.some(e=>e.plugin?.name===${pluginNameVar}||e.plugin?.id?.split(\`@\`)[0]===${pluginNameVar})&&(${pluginsQueryVar}={...${pluginsQueryVar},availablePlugins:[...${pluginsQueryVar}.availablePlugins,{marketplaceName:\`openai-bundled\`,marketplacePath:${bundledMarketplaceDonorVar}.marketplacePath,logoPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,logoDarkPath:new URL(\`computer-use-plugin-icon-linux.png\`,import.meta.url).href,plugin:{id:${pluginNameVar},name:${pluginNameVar},installed:!0,enabled:!0}}]});let ${nextVar}=`;
+      },
+    );
+  }
+
   if (
     availabilityChanged &&
     cardChanged &&

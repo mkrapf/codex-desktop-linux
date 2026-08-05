@@ -9807,6 +9807,33 @@ test("enables the current Computer Use settings contract on Linux", () => {
   assert.match(patched, /marketplaceName:`openai-bundled`/);
 });
 
+test("enables the latest memoized Computer Use settings contract on Linux", () => {
+  const source =
+    "function Pn(){let e=cache(29),{selectedHostId:t}=host(),n=data(t),i={hostId:t};" +
+    "let a=useAvailability(i),{platform:o}=usePlatform(),s=flag();" +
+    "let y=jsx(In,{computerUseAvailability:a,platform:o});" +
+    "let S=a.available?jsx(AllowedApps,{}):null;return jsx(Page,{children:[y,S]})}" +
+    "function In(e){let t=cache(50),{computerUseAvailability:n,platform:i}=e,{selectedHostId:c}=host(),S=[];" +
+    "let C=usePlugins(c,S),w=useMarketplacePath(c),T=useFlag(firstFlag),D=useFlag(secondFlag),O=useFlag(thirdFlag),k=useFlag(fourthFlag),A=useFlag(fifthFlag),N;" +
+    "let P=N,F;F=selectPlugin(C.availablePlugins,computerUsePluginName,w);return F}";
+
+  const patched = applyPatchTwice(applyLinuxComputerUseRendererAvailabilityPatch, source);
+
+  assert.match(
+    patched,
+    /o===`linux`&&\(a=\{\.\.\.a,available:!0,isFetching:!1,isLoading:!1\}\);/,
+  );
+  assert.match(
+    patched,
+    /let CBundledMarketplaceDonor=C\.availablePlugins\.find\(e=>e\.marketplaceName===`openai-bundled`/,
+  );
+  assert.match(
+    patched,
+    /i===`linux`&&CBundledMarketplaceDonor!=null&&!C\.availablePlugins\.some/,
+  );
+  assert.match(patched, /let T=useFlag\(firstFlag\)/);
+});
+
 test("reuses current bundled-plugin metadata for the synthetic Computer Use card", () => {
   const source =
     "function Ht(){let e=cache(24),{selectedHostId:t}=host(),n=data(t),i={hostId:t};" +
