@@ -481,7 +481,7 @@ function applyCurrentComputerUseSettingsContract(currentSource) {
     },
   );
 
-  // Current 26.727 memoizes the Computer Use plugin lookup after the initial
+  // Current 26.730 memoizes the Computer Use plugin lookup after the initial
   // plugin-query declaration instead of keeping the lookup in that declaration.
   // Split the declaration at its next binding so Linux can inject the bundled
   // marketplace entry before any memoized plugin selectors read the query.
