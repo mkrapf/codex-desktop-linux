@@ -6,6 +6,10 @@
   <a href="https://discord.gg/skCB3DXqgw"><img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white" alt="Join the Discord community"></a>
 </p>
 
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 Unofficial Linux build wrapper for [OpenAI ChatGPT Desktop](https://chatgpt.com/features/desktop/).
 The official ChatGPT app is available for macOS and Windows; this repository
 covers Linux by converting the upstream macOS `Codex.dmg` into a runnable Linux
@@ -47,6 +51,7 @@ cd codex-desktop-linux
 | Platform | Recommended path | Notes |
 |---|---|---|
 | Debian, Ubuntu, Pop!_OS, Mint, Elementary | `make bootstrap-native` | Builds and installs a `.deb` |
+| Raspberry Pi 5 (64-bit) | `make bootstrap-native` | Validated on a 16 GB Pi 5; see [Raspberry Pi 5](docs/raspberry-pi-5.md) |
 | Fedora | `make bootstrap-native` | Builds and installs an `.rpm` |
 | openSUSE | `make bootstrap-native` | Builds and installs an `.rpm` |
 | Arch, Manjaro, EndeavourOS | `make bootstrap-native` | Builds and installs a pacman package |
@@ -360,6 +365,7 @@ Full list: [Troubleshooting](docs/troubleshooting.md).
 ## Project Docs
 
 - [Native setup](docs/native-setup.md)
+- [Raspberry Pi 5](docs/raspberry-pi-5.md)
 - [Nix](docs/nix.md)
 - [Linux Computer Use](docs/linux-computer-use.md)
 - [Record and Replay on Linux](docs/record-and-replay-linux.md)
