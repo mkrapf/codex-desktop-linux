@@ -1114,8 +1114,8 @@ stage_chrome_plugin_from_upstream() {
     patch_browser_use_node_repl_process_env_import "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_node_repl_env_guard "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_node_repl_config_shim "$target_plugin/scripts/browser-client.mjs"
+    patch_browser_use_node_repl_runtime_clone_shim "$target_plugin/scripts/browser-client.mjs"
     patch_browser_use_native_pipe_import_meta_bridge "$target_plugin/scripts/browser-client.mjs"
-    patch_browser_use_site_status_allowlist_fallback "$target_plugin/scripts/browser-client.mjs"
     patch_browser_client_linux_socket_dir "$target_plugin/scripts/browser-client.mjs"
     normalize_plugin_script_executable_modes "$target_plugin"
     if ! install_chrome_extension_host_resource "$target_plugin"; then
@@ -1125,61 +1125,6 @@ stage_chrome_plugin_from_upstream() {
 
     info "Chrome plugin staged from upstream DMG"
     return 0
-}
-
-patch_browser_use_site_status_allowlist_fallback() {
-    local client="$1"
-
-    if grep -q "codexLinuxSiteStatusAllowlistFallback" "$client"; then
-        return 0
-    fi
-
-    python3 - "$client" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text(encoding="utf-8")
-pattern = re.compile(
-    r'async fetchBlocked\((?P<url>[A-Za-z_$][\w$]*),(?P<label>[A-Za-z_$][\w$]*)\)\{'
-    r'let (?P<response>[A-Za-z_$][\w$]*)=await (?P<fetch>[A-Za-z_$][\w$]*)'
-    r'\((?P=url)\.endpoint,\{method:"GET"\}\);'
-    r'if\(!(?P=response)\.ok\)throw new Error\((?P<format>[A-Za-z_$][\w$]*)'
-    r'\(`\$\{(?P=label)\} cannot determine if \$\{(?P=url)\.displayUrl\} is allowed\. '
-    r'Please try again later or use another source\.`\)\);'
-    r'let (?P<json>[A-Za-z_$][\w$]*)=await (?P=response)\.json\(\);'
-    r'return (?P<status>[A-Za-z_$][\w$]*)\((?P=json)\)\}'
-)
-match = pattern.search(source)
-if match is None:
-    if "/aura/site_status" not in source and "fetchBlocked(" not in source:
-        raise SystemExit(0)
-    print(
-        "WARN: Could not find Browser Use site_status allowlist fallback insertion point — leaving browser-client.mjs unchanged",
-        file=sys.stderr,
-    )
-    raise SystemExit(0)
-
-url = match.group("url")
-response = match.group("response")
-fetch = match.group("fetch")
-formatter = match.group("format")
-json_value = match.group("json")
-status = match.group("status")
-label = match.group("label")
-error = "__codexLinuxErr"
-error_message = f'${{{label}}} cannot determine if ${{{url}.displayUrl}} is allowed. Please try again later or use another source.'
-replacement = (
-    f'async fetchBlocked({url},{label}){{let {response};try{{{response}=await {fetch}({url}.endpoint,{{method:"GET"}})}}'
-    f'catch({error}){{if(String({url}?.endpoint??"").includes("/aura/site_status")&&'
-    f'String({error}?.message??{error}).toLowerCase().includes("allowlist"))'
-    f'return!1/*codexLinuxSiteStatusAllowlistFallback*/;throw {error}}}'
-    f'if(!{response}.ok)throw new Error({formatter}(`{error_message}`));'
-    f'let {json_value}=await {response}.json();return {status}({json_value})}}'
-)
-path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
-PY
 }
 
 patch_browser_use_file_url_policy() {
@@ -1506,6 +1451,57 @@ path.write_text(source[:match.start()] + replacement + source[match.end():], enc
 PY
 }
 
+patch_browser_use_node_repl_runtime_clone_shim() {
+    local client="$1"
+
+    if grep -q "codexLinuxBrowserUseRuntimeCloneShim" "$client"; then
+        return 0
+    fi
+
+    python3 - "$client" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+if "codexLinuxBrowserUseNodeReplMethodShim" not in source:
+    print(
+        "WARN: Browser Use nodeRepl method shim is unavailable — leaving the runtime clone unchanged",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
+
+pattern = re.compile(
+    r'(?P<declaration>'
+    r'let (?P<elicitation>[A-Za-z_$][\w$]*)='
+    r'(?P<source>[A-Za-z_$][\w$]*)\.createElicitation\.bind\((?P=source)\),'
+    r'(?P<runtime>[A-Za-z_$][\w$]*)=\{\.\.\.(?P=source),.{1,2048}?\}'
+    r')'
+    r',(?P<next>'
+    r'[A-Za-z_$][\w$]*=await [A-Za-z_$][\w$]*\((?P=source),(?P=runtime)\);return'
+    r')',
+    re.DOTALL,
+)
+match = pattern.search(source)
+if match is None:
+    print(
+        "WARN: Could not find Browser Use nodeRepl runtime clone — leaving browser-client.mjs unchanged",
+        file=sys.stderr,
+    )
+    raise SystemExit(0)
+
+runtime = match.group("runtime")
+replacement = (
+    match.group("declaration")
+    + ";/*codexLinuxBrowserUseRuntimeCloneShim*/"
+    + f"codexLinuxBrowserUseNodeReplMethodShim({runtime});let "
+    + match.group("next")
+)
+path.write_text(source[:match.start()] + replacement + source[match.end():], encoding="utf-8")
+PY
+}
+
 patch_browser_use_native_pipe_import_meta_bridge() {
     local client="$1"
 
@@ -1626,8 +1622,8 @@ stage_browser_plugin_from_upstream() {
     patch_browser_use_node_repl_process_env_import "$target_client"
     patch_browser_use_node_repl_env_guard "$target_client"
     patch_browser_use_node_repl_config_shim "$target_client"
+    patch_browser_use_node_repl_runtime_clone_shim "$target_client"
     patch_browser_use_native_pipe_import_meta_bridge "$target_client"
-    patch_browser_use_site_status_allowlist_fallback "$target_client"
     patch_browser_use_file_url_policy "$target_client"
     patch_browser_client_iab_socket_scope "$target_client"
 
